@@ -1,10 +1,8 @@
 import os
 import json
-import time
 import requests
 import resend
-from google import genai
-from google.genai import types
+from groq import Groq
 
 STATE_FILE = "last_seen_change.txt"
 RECIPIENT_EMAIL = "mian72@gmail.com"
@@ -42,32 +40,31 @@ def fetch_skollagen_changes() -> dict:
 
 def send_email_notification(subject: str, body_text: str):
     resend_api_key = os.environ.get("RESEND_API_KEY")
-    
     if not resend_api_key:
-        print("Varning: RESEND_API_KEY saknas i secrets.")
+        print("Varning: RESEND_API_KEY saknas.")
         return
 
     resend.api_key = resend_api_key
     html_content = body_text.replace("\n", "<br>")
 
     try:
-        r = resend.Emails.send({
+        resend.Emails.send({
             "from": "SkollagAgent <onboarding@resend.dev>",
             "to": RECIPIENT_EMAIL,
             "subject": subject,
             "html": f"<h2>Ny ändring i Skollagen registrerad</h2><p>{html_content}</p>"
         })
-        print(f"E-post skickat framgångsrikt till {RECIPIENT_EMAIL}!")
+        print(f"E-post skickat till {RECIPIENT_EMAIL}!")
     except Exception as e:
-        print(f"E-POSTFEL: Kunde inte skicka mejl via Resend: {e}")
+        print(f"E-POSTFEL: {e}")
 
 def run_monitor():
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("FEL: GEMINI_API_KEY saknas!")
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if not groq_key:
+        print("FEL: GROQ_API_KEY saknas i secrets!")
         return
 
-    client = genai.Client(api_key=api_key)
+    client = Groq(api_key=groq_key)
     
     last_seen_id = get_last_seen_id()
     latest_change = fetch_skollagen_changes()
@@ -90,46 +87,32 @@ def run_monitor():
         Gör följande:
         1. Sammanfatta vad denna ändring innebär i 3-4 korta punkter.
         2. Förklara vilka som primärt påverkas (t.ex. rektorer, lärare, elever, huvudmän).
-        3. Håll språket professionellt, tydligt och lättillgängligt.
+        3. Håll språket professionellt, tydligt och lättillgängligt på svenska.
         """
 
-        analysis_text = ""
-        # Försök 1: Anropa Gemini
         try:
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction="Du är en juridisk expert på svensk skolrätt och pedagogisk lagstiftning."
-                )
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Du är en juridisk expert på svensk skolrätt och pedagogisk lagstiftning."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                model="llama-3.3-70b-versatile",
             )
-            analysis_text = response.text
+            analysis_text = chat_completion.choices[0].message.content
         except Exception as e:
-            print(f"Svarade med fel första gången: {e}")
-            print("Väntar 40 sekunder och försöker igen...")
-            time.sleep(40)
-            
-            # Försök 2: Kör igen efter paus
-            try:
-                response = client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction="Du är en juridisk expert på svensk skolrätt och pedagogisk lagstiftning."
-                    )
-                )
-                analysis_text = response.text
-            except Exception as e2:
-                print(f"Kunde inte nå Gemini: {e2}")
-                analysis_text = f"Ny ändring registrerad i Skollagen: {latest_change['titel']}.\n(AI-analysen kunde inte slutföras på grund av tillfällig kvotbegränsning, men du kan läsa ändringen på länken nedan)."
+            print(f"AI-FEL: {e}")
+            analysis_text = f"Ny ändring registrerad i Skollagen: {latest_change['titel']}."
 
         subject = f"Lagändring Skollagen: {latest_change['titel']}"
         body = f"{analysis_text}\n\nLäs mer i sin helhet här: {latest_change['url']}"
         
-        # Skicka e-post
         send_email_notification(subject, body)
-        
-        # Spara senast behandlade ID så att samma ändring inte skickas igen
         save_last_seen_id(latest_change["id"])
     else:
         print("Inga nya ändringar i Skollagen sedan förra kontrollen.")
