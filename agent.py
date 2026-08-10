@@ -41,7 +41,7 @@ def fetch_skollagen_changes() -> dict:
 def send_email_notification(subject: str, body_text: str):
     resend_api_key = os.environ.get("RESEND_API_KEY")
     if not resend_api_key:
-        print("Varning: RESEND_API_KEY saknas.")
+        print("Varning: RESEND_API_KEY saknas i secrets.")
         return
 
     resend.api_key = resend_api_key
@@ -54,7 +54,7 @@ def send_email_notification(subject: str, body_text: str):
             "subject": subject,
             "html": f"<h2>Ny ändring i Skollagen registrerad</h2><p>{html_content}</p>"
         })
-        print(f"E-post skickat till {RECIPIENT_EMAIL}!")
+        print(f"E-post skickades till {RECIPIENT_EMAIL}!")
     except Exception as e:
         print(f"E-POSTFEL: {e}")
 
