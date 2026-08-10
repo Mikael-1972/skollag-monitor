@@ -1,11 +1,13 @@
 import os
 import json
 import requests
+import resend
 from google import genai
 from google.genai import types
 
-# Fil för att spara ID på den senaste hanterade ändringen
+# Konfiguration
 STATE_FILE = "last_seen_change.txt"
+RECIPIENT_EMAIL = "mian72@gmail.com"
 
 def get_last_seen_id() -> str:
     """Hämtar ID för den senast behandlade ändringen från fil."""
@@ -20,18 +22,13 @@ def save_last_seen_id(doc_id: str):
         f.write(doc_id)
 
 def fetch_skollagen_changes() -> dict:
-    """
-    Hämtar de senaste dokumenten/ändringarna kopplade till Skollagen (2010:800)
-    från Riksdagens öppna API.
-    """
-    # Sök efter dokument som berör SFS 2010:800
+    """Hämtar de senaste ändringarna kopplade till Skollagen från Riksdagens API."""
     url = "https://data.riksdagen.se/dokumentlista/?sok=2010:800&doktyp=sfs&utformat=json&sort=datum&sortorder=desc"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         
-        # Hämta det senaste dokumentet i listan
         documents = data.get("dokumentlista", {}).get("dokument", [])
         if documents:
             latest_doc = documents[0]
@@ -46,17 +43,30 @@ def fetch_skollagen_changes() -> dict:
         print(f"Fel vid hämtning från Riksdagen: {e}")
     return {}
 
-def send_notification(subject: str, body: str):
-    """
-    Simulerar utskick av notis (kan bytas ut mot SMTP för e-post eller Webhook för Slack/Discord).
-    """
-    print("\n=" * 50)
-    print(f"NOTISERINGS-LARM: {subject}")
-    print("=" * 50)
-    print(body)
-    print("=" * 50 + "\n")
+def send_email_notification(subject: str, body_text: str):
+    """Skickar ett e-postmeddelande via Resend API."""
+    resend_api_key = os.environ.get("RESEND_API_KEY")
+    
+    if not resend_api_key:
+        print("Varning: RESEND_API_KEY saknas i miljövariablerna. Hoppar över mejlutskick.")
+        return
 
-# Main execution
+    resend.api_key = resend_api_key
+
+    # Formatera brödtexten till HTML med radbrytningar
+    html_content = body_text.replace("\n", "<br>")
+
+    try:
+        r = resend.Emails.send({
+            "from": "SkollagAgent <onboarding@resend.dev>",
+            "to": RECIPIENT_EMAIL,
+            "subject": subject,
+            "html": f"<h2>Ny ändring i Skollagen registrerad</h2><p>{html_content}</p>"
+        })
+        print(f"E-post skickat till {RECIPIENT_EMAIL}! ID: {r.get('id')}")
+    except Exception as e:
+        print(f"Misslyckades att skicka e-post: {e}")
+
 def run_monitor():
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
     
@@ -67,11 +77,10 @@ def run_monitor():
         print("Kunde inte hämta data eller inga ändringar hittades.")
         return
 
-    # Om det finns en ny ändring som vi inte har behandlat tidigare
+    # Om det finns en ny ändring som vi inte behandlat
     if latest_change["id"] != last_seen_id:
         print(f"Ny ändring upptäckt! ID: {latest_change['id']}")
 
-        # Be Gemini analysera uppdateringen
         prompt = f"""
         En ny ändring eller tillägg har registrerats gällande Skollagen (2010:800).
         
@@ -94,12 +103,13 @@ def run_monitor():
             )
         )
 
-        # Skicka notis
-        subject = f"Uppdatering i Skollagen: {latest_change['titel']}"
+        subject = f"Lagändring Skollagen: {latest_change['titel']}"
         body = f"{response.text}\n\nLäs mer i sin helhet här: {latest_change['url']}"
-        send_notification(subject, body)
+        
+        # Skicka mejlet
+        send_email_notification(subject, body)
 
-        # Uppdatera minnet så vi inte larmar om samma ändring igen
+        # Spara senast sett ID
         save_last_seen_id(latest_change["id"])
     else:
         print("Inga nya ändringar i Skollagen sedan förra kontrollen.")
